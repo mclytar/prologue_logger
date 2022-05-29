@@ -260,50 +260,57 @@
 //! # Ok(()) }
 //! ```
 
-
-#![warn(missing_docs)]
+//#![warn(missing_docs)]
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "log")]
 use log::{LevelFilter, Metadata, Record};
 
 pub mod error;
+pub mod style;
 mod internals;
 
 use error::{Result, ErrorKind};
 use internals::*;
+use crate::style::{NoStyler, Styler};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 enum NoteKind {
     Help,
     Note
 }
-impl Display for NoteKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl NoteKind {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            NoteKind::Help => write!(f, "{}", console::style("help").white().bright()),
-            NoteKind::Note => write!(f, "{}", console::style("note").white().bright())
+            NoteKind::Help => "help",
+            NoteKind::Note => "note"
         }
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-struct Note {
+struct Note<STYLER: Styler = NoStyler> {
     kind: NoteKind,
     text: String,
+    _styler: PhantomData<STYLER>
 }
-impl Display for Note {
+impl<STYLER: Styler> Display for Note<STYLER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let len = f.width().unwrap_or(0);
         let mut lines = self.text.lines();
+        // Write first line, if any.
         if let Some(line) = lines.next() {
-            writeln!(f, "{: >len$} {} {}: {}", "", NoteDash, self.kind, line, len = f.width().unwrap_or(0))?;
+            let kind = style::title::<_, STYLER>(self.kind.as_str());
+            writeln!(f, "{} {}: {}", style::note_start::<STYLER>(len), kind, line)?;
         }
+        // Write other lines.
         for line in lines {
-            writeln!(f, "{: >len$}         {}", "", line, len = f.width().unwrap_or(0))?;
+            writeln!(f, "{}       {}", style::note_continue::<STYLER>(len), line)?;
         }
         Ok(())
     }
@@ -378,12 +385,13 @@ impl Annotation {
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-struct SourceLine {
+struct SourceLine<STYLER: Styler = NoStyler> {
     line: usize,
     contents: String,
-    annotations: Vec<Annotation>
+    annotations: Vec<Annotation>,
+    _styler: PhantomData<STYLER>
 }
-impl Display for SourceLine {
+impl<STYLER: Styler> Display for SourceLine<STYLER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Get the offset of the line.
         let width = f.width().unwrap_or_else(|| format!("{}", self.line).len());
@@ -422,13 +430,13 @@ impl Display for SourceLine {
         Ok(())
     }
 }
-impl SourceLine {
-    pub fn new<S: Into<String>>(line: usize, contents: S) -> SourceLine {
+impl<STYLER: Styler> SourceLine<STYLER> {
+    pub fn new<S: Into<String>>(line: usize, contents: S) -> SourceLine<STYLER> {
         let contents = contents.into();
         let annotations = Vec::new();
-        SourceLine { line, contents, annotations }
+        SourceLine { line, contents, annotations, _styler: PhantomData }
     }
-    pub fn annotate<R: Into<AnnotationReference>, S: Into<String>>(&mut self, style: EntryKind, reference: R, text: S) -> Result<()> {
+    pub fn annotate<R: Into<AnnotationReference>, S: Into<String>>(&mut self, style: EntryKind, reference: R, text: S) -> Result<(), STYLER> {
         let reference = reference.into();
         let text = text.into();
         let annotation = Annotation { style, reference, text };
@@ -453,14 +461,14 @@ impl SourceLine {
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-struct Source {
+struct Source<STYLER: Styler = NoStyler> {
     filename: Option<PathBuf>,
     line_number: usize,
     position: usize,
-    lines: Vec<SourceLine>,
-    notes: Vec<Note>
+    lines: Vec<SourceLine<STYLER>>,
+    notes: Vec<Note<STYLER>>
 }
-impl Display for Source {
+impl<STYLER: Styler> Display for Source<STYLER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Get the offset of the line.
         let width = if let Some(width) = f.width() {
@@ -503,8 +511,8 @@ impl Display for Source {
         Ok(())
     }
 }
-impl Source {
-    pub fn new(line_number: usize, position: usize) -> Source {
+impl<STYLER: Styler> Source<STYLER> {
+    pub fn new(line_number: usize, position: usize) -> Source<STYLER> {
         Source { filename: None, line_number, position, lines: Vec::new(), notes: Vec::new() }
     }
 
@@ -512,7 +520,7 @@ impl Source {
         self.filename = Some(filename.into());
     }
 
-    pub fn add_line(&mut self, line: SourceLine) {
+    pub fn add_line(&mut self, line: SourceLine<STYLER>) {
         self.lines.push(line);
     }
 }
@@ -562,13 +570,13 @@ impl EntryKind {
 /// Constructed by the [`source`](Entry::source) or [`named_source`](Entry::named_source)
 /// methods of [`Entry`].
 #[derive(Clone, Debug)]
-pub struct EntrySourceBuilder {
-    entry: Entry,
-    source: Source,
-    source_line: Option<SourceLine>
+pub struct EntrySourceBuilder<STYLER: Styler = NoStyler> {
+    entry: Entry<STYLER>,
+    source: Source<STYLER>,
+    source_line: Option<SourceLine<STYLER>>
 }
-impl EntrySourceBuilder {
-    fn annotate<S: Into<String>>(mut self, kind: EntryKind, pos: usize, len: usize, text: S) -> Result<Self> {
+impl<STYLER: Styler> EntrySourceBuilder<STYLER> {
+    fn annotate<S: Into<String>>(mut self, kind: EntryKind, pos: usize, len: usize, text: S) -> Result<Self, STYLER> {
         if let Some(ref mut line) = self.source_line {
             match line.annotate(kind, (pos, len), text) {
                 Ok(_) => {},
@@ -651,7 +659,7 @@ impl EntrySourceBuilder {
     /// // This will result in an `OverlappingAnnotation` error.
     ///  assert!(entry_builder.clone().annotate_err(24, 1, "").is_err());
     /// ```
-    pub fn annotate_err<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self> {
+    pub fn annotate_err<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self, STYLER> {
         self.annotate(EntryKind::Error, pos, len, text)
     }
 
@@ -704,7 +712,7 @@ impl EntrySourceBuilder {
     /// // This will result in an `OverlappingAnnotation` error.
     ///  assert!(entry_builder.clone().annotate_warn(24, 1, "").is_err());
     /// ```
-    pub fn annotate_warn<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self> {
+    pub fn annotate_warn<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self, STYLER> {
         self.annotate(EntryKind::Warning, pos, len, text)
     }
 
@@ -758,7 +766,7 @@ impl EntrySourceBuilder {
     /// // This will result in an `OverlappingAnnotation` error.
     ///  assert!(entry_builder.clone().annotate_note(24, 1, "").is_err());
     /// ```
-    pub fn annotate_note<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self> {
+    pub fn annotate_note<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self, STYLER> {
         self.annotate(EntryKind::Note, pos, len, text)
     }
 
@@ -812,7 +820,7 @@ impl EntrySourceBuilder {
     /// // This will result in an `OverlappingAnnotation` error.
     ///  assert!(entry_builder.clone().annotate_help(24, 1, "").is_err());
     /// ```
-    pub fn annotate_help<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self> {
+    pub fn annotate_help<S: Into<String>>(self, pos: usize, len: usize, text: S) -> Result<Self, STYLER> {
         self.annotate(EntryKind::Help, pos, len, text)
     }
 
@@ -844,7 +852,7 @@ impl EntrySourceBuilder {
     ///                       found reference `&String`
     /// ```
     pub fn note<S: Into<String>>(mut self, text: S) -> Self {
-        self.source.notes.push(Note { kind: NoteKind::Note, text: text.into() });
+        self.source.notes.push(Note { kind: NoteKind::Note, text: text.into(), _styler: PhantomData });
         self
     }
 
@@ -875,7 +883,7 @@ impl EntrySourceBuilder {
     ///   = help: set `edition = "2021"` in `Cargo.toml`
     /// ```
     pub fn help<S: Into<String>>(mut self, text: S) -> Self {
-        self.source.notes.push(Note { kind: NoteKind::Help, text: text.into() });
+        self.source.notes.push(Note { kind: NoteKind::Help, text: text.into(), _styler: PhantomData });
         self
     }
 
@@ -891,7 +899,7 @@ impl EntrySourceBuilder {
     ///     // Finish the construction and return the `Entry` again.
     ///     .finish();
     /// ```
-    pub fn finish(self) -> Entry {
+    pub fn finish(self) -> Entry<STYLER> {
         let EntrySourceBuilder { mut entry, mut source, source_line } = self;
         if let Some(line) = source_line {
             source.add_line(line);
@@ -920,7 +928,7 @@ impl EntrySourceBuilder {
     ///     builder.discard()
     /// };
     /// ```
-    pub fn discard(self) -> Entry {
+    pub fn discard(self) -> Entry<STYLER> {
         let EntrySourceBuilder { entry, .. } = self;
         entry
     }
@@ -932,13 +940,13 @@ impl EntrySourceBuilder {
 /// [`Display`](std::fmt::Display) trait to ease use in formatting macros line `format!`
 /// or `print!`.
 #[derive(Clone, Debug)]
-pub struct Entry {
+pub struct Entry<STYLER: Styler = NoStyler> {
     kind: EntryKind,
     bright: bool,
     text: String,
-    source: Option<Source>
+    source: Option<Source<STYLER>>
 }
-impl Display for Entry {
+impl<STYLER: Styler> Display for Entry<STYLER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let styled = console::style(&self.text);
         let styled = if self.bright { styled.white().bright() } else { styled };
@@ -952,8 +960,8 @@ impl Display for Entry {
         Ok(())
     }
 }
-impl Entry {
-    fn new<S: Into<String>>(kind: EntryKind, text: S) -> Entry {
+impl<STYLER: Styler> Entry<STYLER> {
+    fn new<S: Into<String>>(kind: EntryKind, text: S) -> Entry<STYLER> {
         let text = text.into();
         Entry { kind, bright: false, text, source: None }
     }
@@ -981,7 +989,7 @@ impl Entry {
     ///
     /// For more complete examples, see the [crate help](crate)
     /// or the `examples` directory.
-    pub fn new_error<S: Into<String>>(text: S) -> Entry {
+    pub fn new_error<S: Into<String>>(text: S) -> Entry<STYLER> {
         Entry::new(EntryKind::Error, text)
     }
 
@@ -1008,7 +1016,7 @@ impl Entry {
     ///
     /// For more complete examples, see the [crate help](crate)
     /// or the `examples` directory.
-    pub fn new_warning<S: Into<String>>(text: S) -> Entry {
+    pub fn new_warning<S: Into<String>>(text: S) -> Entry<STYLER> {
         Entry::new(EntryKind::Warning, text)
     }
 
@@ -1035,7 +1043,7 @@ impl Entry {
     ///
     /// For more complete examples, see the [crate help](crate)
     /// or the `examples` directory.
-    pub fn new_note<S: Into<String>>(text: S) -> Entry {
+    pub fn new_note<S: Into<String>>(text: S) -> Entry<STYLER> {
         Entry::new(EntryKind::Note, text)
     }
 
@@ -1062,7 +1070,7 @@ impl Entry {
     ///
     /// For more complete examples, see the [crate help](crate)
     /// or the `examples` directory.
-    pub fn new_help<S: Into<String>>(text: S) -> Entry {
+    pub fn new_help<S: Into<String>>(text: S) -> Entry<STYLER> {
         Entry::new(EntryKind::Help, text)
     }
 
@@ -1105,7 +1113,7 @@ impl Entry {
     /// will be printed in bright yellow.
     ///
     /// For more complete examples, see the `examples` directory.
-    pub fn source(mut self, line_number: usize, pos: usize) -> EntrySourceBuilder {
+    pub fn source(mut self, line_number: usize, pos: usize) -> EntrySourceBuilder<STYLER> {
         let source = Source::new(line_number, pos);
         self.bright = true;
         EntrySourceBuilder { entry: self, source, source_line: None }
@@ -1150,7 +1158,7 @@ impl Entry {
     /// will be printed in bright yellow.
     ///
     /// For more complete examples, see the `examples` directory.
-    pub fn named_source<P: Into<PathBuf>>(mut self, filename: P, line_number: usize, pos: usize) -> EntrySourceBuilder {
+    pub fn named_source<P: Into<PathBuf>>(mut self, filename: P, line_number: usize, pos: usize) -> EntrySourceBuilder<STYLER> {
         let mut source = Source::new(line_number, pos);
         source.set_filename(filename);
         self.bright = true;
@@ -1201,7 +1209,7 @@ impl Entry {
     ///     .log_to_target(&target)?;
     /// # Ok(()) }
     /// ```
-    pub fn log_to_target(self, target: &Target) -> Result<()> {
+    pub fn log_to_target(self, target: &Target<STYLER>) -> Result<(), STYLER> {
         target.log_entry(self)
     }
 
@@ -1222,7 +1230,7 @@ impl Entry {
     ///     .log_to_prologue_logger("example", &logger);
     /// # Ok(()) }
     /// ```
-    pub fn log_to_prologue_logger<S: AsRef<str>>(self, target: S, logger: &PrologueLogger) -> Result<()> {
+    pub fn log_to_prologue_logger<S: AsRef<str>>(self, target: S, logger: &PrologueLogger<STYLER>) -> Result<(), STYLER> {
         let target = logger.target_list.find(target);
         if let Some(target) = target {
             target.log_entry(self)?;
@@ -1440,16 +1448,16 @@ impl MultiEntry {
 /// i.e. the "verb" will be printed in bright green and the trailing text will be printed
 /// in white.
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-pub struct Task(String, String);
-impl Display for Task {
+pub struct Task<STYLER: Styler = NoStyler>(String, String, PhantomData<STYLER>);
+impl<STYLER: Styler> Display for Task<STYLER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{: >width$} {}", console::style(&self.0).green().bright(), self.1, width = f.width().unwrap_or(12))
     }
 }
-impl Task {
+impl<STYLER: Styler> Task<STYLER> {
     /// Creates a new entry given a `task` and a `description`.
-    pub fn new<S1: Into<String>, S2: Into<String>>(task: S1, description: S2) -> Task {
-        Task(task.into(), description.into())
+    pub fn new<S1: Into<String>, S2: Into<String>>(task: S1, description: S2) -> Task<STYLER> {
+        Task(task.into(), description.into(), PhantomData)
     }
 
     /// Logs the current `Task` to the given `target`, consuming it.
@@ -1469,7 +1477,7 @@ impl Task {
     ///     .log_to_target(&target);
     /// # Ok(()) }
     /// ```
-    pub fn log_to_target(self, target: &Target) -> Result<()> {
+    pub fn log_to_target(self, target: &Target<STYLER>) -> Result<(), STYLER> {
         target.log_inline_entry(self)
     }
 
@@ -1491,7 +1499,7 @@ impl Task {
     ///     .log_to_prologue_logger("example", &logger);
     /// # Ok(()) }
     /// ```
-    pub fn log_to_prologue_logger<S: AsRef<str>>(self, target: S, logger: &PrologueLogger) -> Result<()> {
+    pub fn log_to_prologue_logger<S: AsRef<str>>(self, target: S, logger: &PrologueLogger<STYLER>) -> Result<(), STYLER> {
         let target = logger.target_list.find(target);
         if let Some(target) = target {
             target.log_inline_entry(self)?;
@@ -1525,32 +1533,33 @@ impl Task {
 
 /// Log target containing information about the number of logged warnings/errors.
 #[derive(Clone, Debug)]
-pub struct Target {
+pub struct Target<STYLER: Styler = NoStyler> {
     name: Arc<Cow<'static, str>>,
     warnings: Arc<Mutex<usize>>,
     errors: Arc<Mutex<usize>>,
     #[cfg(feature = "indicatif")]
-    multi_progress: indicatif::MultiProgress
+    multi_progress: indicatif::MultiProgress,
+    _styler: PhantomData<STYLER>
 }
-impl Target {
+impl<STYLER: Styler> Target<STYLER> {
     /// Creates a new target with the given `name`.
-    pub fn new<S: Into<Cow<'static, str>>>(name: S) -> Target {
+    pub fn new<S: Into<Cow<'static, str>>>(name: S) -> Target<STYLER> {
         let name = Arc::new(name.into());
         let warnings = Arc::new(Mutex::new(0));
         let errors = Arc::new(Mutex::new(0));
         #[cfg(feature = "indicatif")]
         let multi_progress = indicatif::MultiProgress::new();
-        Target { name, warnings, errors, #[cfg(feature = "indicatif")] multi_progress }
+        Target { name, warnings, errors, #[cfg(feature = "indicatif")] multi_progress, _styler: PhantomData }
     }
 
     /// Creates a new target with the given `name` and assigns an existing
     /// `MultiProgress` to it.
     #[cfg(feature = "indicatif")]
-    pub fn with_multi_progress<S: Into<Cow<'static, str>>>(name: S, multi_progress: indicatif::MultiProgress) -> Target {
+    pub fn with_multi_progress<S: Into<Cow<'static, str>>>(name: S, multi_progress: indicatif::MultiProgress) -> Target<STYLER> {
         let name = Arc::new(name.into());
         let warnings = Arc::new(Mutex::new(0));
         let errors = Arc::new(Mutex::new(0));
-        Target { name, warnings, errors, multi_progress }
+        Target { name, warnings, errors, multi_progress, _styler: PhantomData }
     }
 
     /// Obtains the name of this target.
@@ -1611,7 +1620,7 @@ impl Target {
         *self.errors.lock().unwrap()
     }
 
-    fn log_entry(&self, entry: Entry) -> Result<()> {
+    fn log_entry(&self, entry: Entry<STYLER>) -> Result<(), STYLER> {
         match entry.kind {
             EntryKind::Error => { *self.errors.lock().unwrap() += 1; },
             EntryKind::Warning => { *self.warnings.lock().unwrap() += 1; },
@@ -1641,7 +1650,7 @@ impl Target {
         Ok(())
     }
 
-    fn log_inline_entry(&self, entry: Task) -> Result<()> {
+    fn log_inline_entry(&self, entry: Task<STYLER>) -> Result<(), STYLER> {
         #[cfg(not(feature = "indicatif"))]
         eprint!("{}", entry);
         #[cfg(feature = "indicatif")]
@@ -1687,7 +1696,7 @@ impl Target {
     /// // However, the general-purpose target now contains a warning.
     /// assert_eq!(global_target.warning_count(), 1);
     /// ```
-    pub fn if_warnings<F: FnOnce(usize) -> Result<()>>(&self, callback: F) -> Result<()> {
+    pub fn if_warnings<F: FnOnce(usize) -> Result<(), STYLER>>(&self, callback: F) -> Result<(), STYLER> {
         let warning_count = self.warning_count();
         if warning_count > 0 {
             callback(warning_count)
@@ -1719,7 +1728,7 @@ impl Target {
     /// // However, the general-purpose target now contains an error.
     /// assert_eq!(global_target.error_count(), 1);
     /// ```
-    pub fn if_errors<F: FnOnce(usize) -> Result<()>>(&self, callback: F) -> Result<()> {
+    pub fn if_errors<F: FnOnce(usize) -> Result<(), STYLER>>(&self, callback: F) -> Result<(), STYLER> {
         let error_count = self.error_count();
         if error_count > 0 {
             callback(error_count)
@@ -1731,12 +1740,12 @@ impl Target {
 
 /// A list of log targets.
 #[derive(Clone, Debug)]
-pub struct TargetList {
-    list: Arc<Mutex<Vec<Target>>>,
+pub struct TargetList<STYLER: Styler = NoStyler> {
+    list: Arc<Mutex<Vec<Target<STYLER>>>>,
     #[cfg(feature = "indicatif")]
     multi_progress: indicatif::MultiProgress
 }
-impl Default for TargetList {
+impl<STYLER: Styler> Default for TargetList<STYLER> {
     fn default() -> Self {
         TargetList {
             list: Arc::new(Mutex::new(Vec::new())),
@@ -1745,9 +1754,9 @@ impl Default for TargetList {
         }
     }
 }
-impl TargetList {
+impl<STYLER: Styler> TargetList<STYLER> {
     /// Creates a new, empty list of targets.
-    pub fn new() -> TargetList {
+    pub fn new() -> TargetList<STYLER> {
         Default::default()
     }
 
@@ -1766,7 +1775,7 @@ impl TargetList {
     ///     .expect("no target `my-target`");
     /// target.if_errors(errors_callback);
     /// ```
-    pub fn find<S: AsRef<str>>(&self, name: S) -> Option<Target> {
+    pub fn find<S: AsRef<str>>(&self, name: S) -> Option<Target<STYLER>> {
         let name = name.as_ref();
         let target = self.list.lock().unwrap().iter()
             .find(|t| t.name.as_ref() == name)
@@ -1790,7 +1799,7 @@ impl TargetList {
     ///     .log_to_target(&target);
     /// # Ok(()) }
     /// ```
-    pub fn create_target<S: Into<Cow<'static, str>>>(&self, name: S) -> Result<Target> {
+    pub fn create_target<S: Into<Cow<'static, str>>>(&self, name: S) -> Result<Target<STYLER>> {
         #[cfg(not(feature = "indicatif"))]
         let target = Target::new(name);
         #[cfg(feature = "indicatif")]
@@ -1811,7 +1820,7 @@ impl TargetList {
     /// target_list.add_target(target)?;
     /// # Ok(()) }
     /// ```
-    pub fn add_target(&self, target: Target) -> Result<()> {
+    pub fn add_target(&self, target: Target<STYLER>) -> Result<()> {
         if let Some(other_target) = self.find(target.name.as_ref()) {
             Err(ErrorKind::TargetAlreadyExists(other_target.name.to_string()).into())
         } else {
@@ -1842,12 +1851,12 @@ impl TargetList {
 ///
 /// It handles log entries and displays them to `stderr`.
 #[derive(Debug)]
-pub struct PrologueLogger {
-    target_list: TargetList
+pub struct PrologueLogger<STYLER: Styler = NoStyler> {
+    target_list: TargetList<STYLER>
 }
-impl PrologueLogger {
+impl<STYLER: Styler> PrologueLogger<STYLER> {
     /// Creates a new `PrologueLogger` with an empty target list.
-    pub fn new() -> PrologueLogger {
+    pub fn new() -> PrologueLogger<STYLER> {
         #[cfg(feature = "indicatif")]
         let multi_progress = indicatif::MultiProgress::new();
         PrologueLogger {
@@ -1884,8 +1893,8 @@ impl PrologueLogger {
     /// }
     /// ```
     #[cfg(feature = "log")]
-    pub fn init() -> Result<TargetList> {
-        let logger = PrologueLogger::new();
+    pub fn init() -> Result<TargetList<STYLER>> {
+        let logger = PrologueLogger::<STYLER>::new();
         let target_list = logger.target_list();
         log::set_max_level(log::LevelFilter::Debug);
         log::set_boxed_logger(Box::new(logger))?;
@@ -1909,7 +1918,7 @@ impl PrologueLogger {
     /// target.if_errors(errors_callback);
     /// # Ok(()) }
     /// ```
-    pub fn find_target<S: AsRef<str>>(&self, name: S) -> Option<Target> {
+    pub fn find_target<S: AsRef<str>>(&self, name: S) -> Option<Target<STYLER>> {
         self.target_list.find(name)
     }
 
@@ -1935,7 +1944,7 @@ impl PrologueLogger {
     /// assert!(logger.find_target("target-third").is_some());
     /// # Ok(()) }
     /// ```
-    pub fn target_list(&self) -> TargetList {
+    pub fn target_list(&self) -> TargetList<STYLER> {
         self.target_list.clone()
     }
 
@@ -1955,7 +1964,7 @@ impl PrologueLogger {
     ///     .log_to_target(&target);
     /// # Ok(()) }
     /// ```
-    pub fn create_target<S: Into<Cow<'static, str>>>(&self, name: S) -> Result<Target> {
+    pub fn create_target<S: Into<Cow<'static, str>>>(&self, name: S) -> Result<Target<STYLER>> {
         self.target_list.create_target(name)
     }
 
@@ -1971,7 +1980,7 @@ impl PrologueLogger {
     /// logger.add_target(target)?;
     /// # Ok(()) }
     /// ```
-    pub fn add_target(&self, target: Target) -> Result<()> {
+    pub fn add_target(&self, target: Target<STYLER>) -> Result<()> {
         self.target_list.add_target(target)
     }
 }
