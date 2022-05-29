@@ -1,0 +1,33 @@
+[package]
+name = "prologue_logger"
+version = "0.1.0"
+authors = ["Gianluca Brian <gianluca.brian.94@gmail.com>"]
+description = "A Rust library to produce Rust-like logs for source code or settings files"
+edition = "2021"
+readme = "README.md"
+repository = "https://github.com/mclytar/prologue_logger"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+console = { version = "0.15.0", optional = true }
+log = { version = "0.4.17", features = ["std"], optional = true }
+indicatif = { version = "0.17.0-rc.10", optional = true }
+
+[package.metadata.docs.rs]
+features = ["indicatif", "log"]
+
+[[example]]
+name = "file"
+required-features = ["log"]
+
+[[example]]
+name = "simple"
+required-features = ["console"]
+
+[[example]]
+name = "indicatif"
+required-features = ["console", "indicatif", "log"]
+
+[[example]]
+name = "log"
+required-features = ["console", "log"]
