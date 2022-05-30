@@ -5,27 +5,27 @@ use std::fmt::{Formatter};
 use crate::{Entry, EntrySourceBuilder, MultiEntry, NoStyler, Styler};
 
 /// Alias type for `std::result::Result<T, prologue_emitter::error::Error>`
-pub type Result<T, STYLER = NoStyler> = std::result::Result<T, Error<STYLER>>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Contains the `struct` which was being constructed before the `Error` happened, if any.
 #[derive(Debug)]
-pub enum PartialConfiguration<STYLER: Styler = NoStyler> {
+pub enum PartialConfiguration {
     /// The partial configuration is empty.
     None,
     /// The partial configuration contains an [`Entry`](super::Entry).
-    Entry(super::Entry<STYLER>),
+    Entry(super::Entry),
     /// The partial configuration contains an [`EntrySourceBuilder`](super::EntrySourceBuilder).
-    EntrySourceBuilder(super::EntrySourceBuilder<STYLER>),
+    EntrySourceBuilder(super::EntrySourceBuilder),
     /// The partial configuration contains a [`MultiEntry`](super::MultiEntry).
     MultiEntry(super::MultiEntry)
 }
-impl<STYLER: Styler> From<super::Entry<STYLER>> for PartialConfiguration<STYLER> {
-    fn from(entry: Entry<STYLER>) -> Self {
+impl From<super::Entry> for PartialConfiguration {
+    fn from(entry: Entry) -> Self {
         PartialConfiguration::Entry(entry)
     }
 }
-impl<STYLER: Styler> From<super::EntrySourceBuilder<STYLER>> for PartialConfiguration<STYLER> {
-    fn from(esb: EntrySourceBuilder<STYLER>) -> Self {
+impl From<super::EntrySourceBuilder> for PartialConfiguration {
+    fn from(esb: EntrySourceBuilder) -> Self {
         PartialConfiguration::EntrySourceBuilder(esb)
     }
 }
@@ -41,16 +41,16 @@ impl From<super::MultiEntry> for PartialConfiguration {
 /// It contains the [`ErrorKind`] describing the type of error, and a [`PartialConfiguration`]
 /// containing any `struct` which was being built before the error happened, if any.
 #[derive(Debug)]
-pub struct Error<STYLER: Styler = NoStyler> {
+pub struct Error {
     kind: ErrorKind,
-    partial_configuration: PartialConfiguration<STYLER>
+    partial_configuration: PartialConfiguration
 }
-impl<STYLER: Styler> std::fmt::Display for Error<STYLER> {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         (&self.kind as &dyn std::fmt::Display).fmt(f)
     }
 }
-impl<STYLER: Styler> From<ErrorKind> for Error<STYLER> {
+impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Error { kind, partial_configuration: PartialConfiguration::None }
     }
@@ -67,20 +67,20 @@ impl From<std::io::Error> for Error {
         Error { kind: ErrorKind::IoError(Box::new(err)), partial_configuration: PartialConfiguration::None }
     }
 }
-impl<STYLER: Styler> std::error::Error for Error<STYLER> {}
-impl<STYLER: Styler> Error<STYLER> {
+impl std::error::Error for Error {}
+impl Error {
     /// Returns the type of error.
     pub fn kind(&self) -> &ErrorKind {
         &self.kind
     }
 
     /// Attaches a partial configuration to this `struct`.
-    pub(crate) fn set_partial_configuration<P: Into<PartialConfiguration<STYLER>>>(&mut self, cfg: P) {
+    pub(crate) fn set_partial_configuration<P: Into<PartialConfiguration>>(&mut self, cfg: P) {
         self.partial_configuration = cfg.into();
     }
 
     /// Discards the error and returns the inner partial configuration.
-    pub fn into_partial_configuration(self) -> PartialConfiguration<STYLER> {
+    pub fn into_partial_configuration(self) -> PartialConfiguration {
         let Error { partial_configuration: partial, .. } = self;
         partial
     }
@@ -119,7 +119,7 @@ impl std::fmt::Display for ErrorKind {
 }
 impl ErrorKind {
     /// Promotes this `ErrorKind` to an error with the given partial configuration.
-    pub(crate) fn into_error_with_partial_configuration<STYLER: Styler, P: Into<PartialConfiguration<STYLER>>>(self, cfg: P) -> Error<STYLER> {
+    pub(crate) fn into_error_with_partial_configuration<P: Into<PartialConfiguration>>(self, cfg: P) -> Error {
         let partial = cfg.into();
         Error { kind: self, partial_configuration: partial }
     }

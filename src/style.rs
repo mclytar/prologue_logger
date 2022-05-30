@@ -1,50 +1,135 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-use std::marker::PhantomData;
 
-pub struct ObjectWithStyler<O, STYLER: Styler = NoStyler> {
-    obj: O,
-    fmt: fn(&mut std::fmt::Formatter<'_>, &O) -> std::fmt::Result,
-    _styler: PhantomData<STYLER>
+pub trait Styler: Debug + Send + Sync {
+    fn fmt_string(&self, f: &mut std::fmt::Formatter<'_>, template: StylerTemplate, obj: String) -> std::fmt::Result {
+        self.fmt_str(f, template, &obj)
+    }
+
+    fn fmt_str(&self, f: &mut std::fmt::Formatter<'_>, _template: StylerTemplate, obj: &str) -> std::fmt::Result {
+        Display::fmt(obj, f)
+    }
+
+    fn fmt_usize(&self, f: &mut std::fmt::Formatter<'_>, _template: StylerTemplate, obj: usize) -> std::fmt::Result {
+        Display::fmt(&obj, f)
+    }
+
+    fn fmt_char(&self, f: &mut std::fmt::Formatter<'_>, _template: StylerTemplate, obj: char) -> std::fmt::Result {
+        Display::fmt(&obj, f)
+    }
 }
-impl<O: Display, STYLER: Styler> Display for ObjectWithStyler<O, STYLER> {
+
+pub trait Styled: Debug + Send + Sync {
+    fn fmt_styled(&self, f: &mut std::fmt::Formatter<'_>, styler: &'static dyn Styler) -> std::fmt::Result;
+}
+
+#[derive(Clone, Debug)]
+pub struct StyledLineStart<'a> {
+    number: Option<usize>,
+    sep_ch: char,
+    number_template: StylerTemplate,
+    sep_ch_template: StylerTemplate,
+    styler: &'a dyn Styler
+}
+impl<'a> StyledLineStart<'a> {
+    pub fn new(styler: &'a dyn Styler) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch: '|',
+            number_template: StylerTemplate::Help,
+            sep_ch_template: StylerTemplate::Help,
+            styler
+        }
+    }
+
+    pub fn new_bullet(styler: &'a dyn Styler) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch: '=',
+            number_template: StylerTemplate::Help,
+            sep_ch_template: StylerTemplate::Help,
+            styler
+        }
+    }
+
+    pub fn new_empty(styler: &'a dyn Styler) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch: ' ',
+            number_template: StylerTemplate::Help,
+            sep_ch_template: StylerTemplate::Help,
+            styler
+        }
+    }
+
+    pub fn new_plus(styler: &'a dyn Styler) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch: '+',
+            number_template: StylerTemplate::Help,
+            sep_ch_template: StylerTemplate::Add,
+            styler
+        }
+    }
+
+    pub fn new_minus(styler: &'a dyn Styler) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch: '-',
+            number_template: StylerTemplate::Help,
+            sep_ch_template: StylerTemplate::Remove,
+            styler
+        }
+    }
+
+
+    pub fn with_custom_separator(styler: &'a dyn Styler, sep_ch: char, sep_ch_template: StylerTemplate) -> StyledLineStart<'a> {
+        StyledLineStart {
+            number: None,
+            sep_ch,
+            number_template: StylerTemplate::Help,
+            sep_ch_template,
+            styler
+        }
+    }
+
+    pub fn line_number(mut self, line_number: usize) -> Self {
+        self.number = Some(line_number);
+        self
+    }
+
+    pub fn line_number_template(mut self, line_number_template: StylerTemplate) -> Self {
+        self.number_template = line_number_template;
+        self
+    }
+}
+impl<'a> Display for StyledLineStart<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let fmt = self.fmt;
-        fmt(f, &self.obj)
+        if let Some(number) = self.number {
+            self.styler.fmt_usize(f, self.number_template, number)?;
+        } else {
+            self.styler.fmt_str(f, self.number_template, "")?;
+        }
+        write!(f, " ")?;
+        self.styler.fmt_char(f, self.sep_ch_template, self.sep_ch)?;
+        write!(f, " ")
     }
 }
 
-pub fn title<D: Display, STYLER: Styler>(obj: D) -> ObjectWithStyler<D, STYLER> {
-    ObjectWithStyler { obj, fmt: STYLER::fmt_title, _styler: PhantomData }
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum StylerTemplate {
+    Normal,
+    Title,
+    Warning,
+    Error,
+    Help,
+    Note,
+    Add,
+    Remove
 }
-pub fn help<D: Display, STYLER: Styler>(obj: D) -> ObjectWithStyler<D, STYLER> {
-    ObjectWithStyler { obj, fmt: STYLER::fmt_help, _styler: PhantomData }
-}
-pub fn note_start<STYLER: Styler>(offset: usize) -> ObjectWithStyler<String, STYLER> {
-    let obj = format!("{: >len$}", "=", len = offset + 2);
-    ObjectWithStyler { obj, fmt: STYLER::fmt_help, _styler: PhantomData }
-}
-pub fn note_continue<STYLER: Styler>(offset: usize) -> ObjectWithStyler<String, STYLER> {
-    let obj = format!("{: >len$}", " ", len = offset + 2);
-    ObjectWithStyler { obj, fmt: STYLER::fmt_help, _styler: PhantomData }
-}
-
-
-pub trait Styler: Copy + Clone + Debug + Default + Eq + PartialEq + Hash {
-    fn fmt_title<D: Display>(f: &mut std::fmt::Formatter<'_>, obj: &D) -> std::fmt::Result {
-        Display::fmt(obj, f)
-    }
-    fn fmt_warning<D: Display>(f: &mut std::fmt::Formatter<'_>, obj: &D) -> std::fmt::Result {
-        Display::fmt(obj, f)
-    }
-    fn fmt_error<D: Display>(f: &mut std::fmt::Formatter<'_>, obj: &D) -> std::fmt::Result {
-        Display::fmt(obj, f)
-    }
-    fn fmt_help<D: Display>(f: &mut std::fmt::Formatter<'_>, obj: &D) -> std::fmt::Result {
-        Display::fmt(obj, f)
-    }
-    fn fmt_note<D: Display>(f: &mut std::fmt::Formatter<'_>, obj: &D) -> std::fmt::Result {
-        Display::fmt(obj, f)
+impl Default for StylerTemplate {
+    fn default() -> Self {
+        StylerTemplate::Normal
     }
 }
 
@@ -52,17 +137,19 @@ pub trait Styler: Copy + Clone + Debug + Default + Eq + PartialEq + Hash {
 pub struct NoStyler;
 impl Styler for NoStyler {}
 
+/*#[cfg(feature = "console")]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct DefaultConsoleStyler;
+#[cfg(feature = "console")]
 impl Styler for DefaultConsoleStyler {
-    fn fmt_title<D: Display>(f: &mut Formatter<'_>, obj: &D) -> std::fmt::Result {
+    fn fmt_title<D: Display>(&self, f: &mut Formatter<'_>, obj: &D) -> std::fmt::Result {
         Display::fmt(&console::style(obj).white().bright(), f)
     }
 
-    fn fmt_help<D: Display>(f: &mut Formatter<'_>, obj: &D) -> std::fmt::Result {
+    fn fmt_help<D: Display>(&self, f: &mut Formatter<'_>, obj: &D) -> std::fmt::Result {
         Display::fmt(&console::style(obj).cyan().bright(), f)
     }
-}
+}*/
 
 /*#[cfg(feature = "console")]
 pub struct ConsoleColorStyle;
