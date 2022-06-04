@@ -310,7 +310,7 @@ impl Styled for Note {
         // Write other lines.
         for line in lines {
             write!(f, "{: <len$}", StyledLineStart::new_empty(styler), len = len)?;
-            write!(f, "{: <len$} {}", "", line, len = self.kind.as_str().len() + 1)?;
+            writeln!(f, "{: <len$} {}", "", line, len = self.kind.as_str().len() + 1)?;
         }
         // Finish.
         Ok(())
