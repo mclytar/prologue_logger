@@ -77,7 +77,7 @@ impl<T: Display> Display for Title<T> {
         write!(f, "{}", console::style(&self.0).white().bright())
     }
 }
-#[derive(Copy, Clone, Debug)]
+/*#[derive(Copy, Clone, Debug)]
 pub struct AnnotationUnderline(pub(super) super::EntryKind, pub usize);
 impl Display for AnnotationUnderline {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -87,4 +87,4 @@ impl Display for AnnotationUnderline {
             write!(f, "{:^>len$}", self.0.style(""), len = self.1)
         }
     }
-}
+}*/

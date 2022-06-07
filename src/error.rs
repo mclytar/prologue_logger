@@ -2,12 +2,12 @@
 
 use std::fmt::{Formatter};
 
-use crate::{Entry, EntrySourceBuilder, MultiEntry, NoStyler, Styler};
+use crate::{StdWriter, StyledWriter};
 
 /// Alias type for `std::result::Result<T, prologue_emitter::error::Error>`
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Contains the `struct` which was being constructed before the `Error` happened, if any.
+/*/// Contains the `struct` which was being constructed before the `Error` happened, if any.
 #[derive(Debug)]
 pub enum PartialConfiguration {
     /// The partial configuration is empty.
@@ -33,7 +33,7 @@ impl From<super::MultiEntry> for PartialConfiguration {
     fn from(me: MultiEntry) -> Self {
         PartialConfiguration::MultiEntry(me)
     }
-}
+}*/
 
 /// Error `struct` handling the various errors which may arise during the construction
 /// of a log entry.
@@ -43,7 +43,7 @@ impl From<super::MultiEntry> for PartialConfiguration {
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
-    partial_configuration: PartialConfiguration
+    //partial_configuration: PartialConfiguration
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -52,19 +52,19 @@ impl std::fmt::Display for Error {
 }
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
-        Error { kind, partial_configuration: PartialConfiguration::None }
+        Error { kind }
     }
 }
 #[cfg(feature = "log")]
 impl From<log::SetLoggerError> for Error {
     fn from(err: log::SetLoggerError) -> Self {
-        Error { kind: ErrorKind::SetLoggerError(err), partial_configuration: PartialConfiguration::None }
+        Error { kind: ErrorKind::SetLoggerError(err) }
     }
 }
 #[cfg(feature = "indicatif")]
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error { kind: ErrorKind::IoError(Box::new(err)), partial_configuration: PartialConfiguration::None }
+        Error { kind: ErrorKind::IoError(Box::new(err)) }
     }
 }
 impl std::error::Error for Error {}
@@ -72,17 +72,6 @@ impl Error {
     /// Returns the type of error.
     pub fn kind(&self) -> &ErrorKind {
         &self.kind
-    }
-
-    /// Attaches a partial configuration to this `struct`.
-    pub(crate) fn set_partial_configuration<P: Into<PartialConfiguration>>(&mut self, cfg: P) {
-        self.partial_configuration = cfg.into();
-    }
-
-    /// Discards the error and returns the inner partial configuration.
-    pub fn into_partial_configuration(self) -> PartialConfiguration {
-        let Error { partial_configuration: partial, .. } = self;
-        partial
     }
 }
 
@@ -117,14 +106,6 @@ impl std::fmt::Display for ErrorKind {
         }
     }
 }
-impl ErrorKind {
-    /// Promotes this `ErrorKind` to an error with the given partial configuration.
-    pub(crate) fn into_error_with_partial_configuration<P: Into<PartialConfiguration>>(self, cfg: P) -> Error {
-        let partial = cfg.into();
-        Error { kind: self, partial_configuration: partial }
-    }
-}
-
 
 #[cfg(feature = "log")]
 impl From<log::SetLoggerError> for ErrorKind {

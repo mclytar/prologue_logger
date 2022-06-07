@@ -265,6 +265,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "log")]
@@ -275,8 +276,155 @@ pub mod style;
 mod internals;
 
 use error::{Result, ErrorKind};
-use internals::*;
-use crate::style::{NoStyler, Styled, StyledLineStart, Styler, StylerTemplate};
+//use internals::*;
+use crate::style::{RichDisplay, RichMargin, RichText, RightAligned, StdWriter, Style, Styled, StyledItem, StyledWriter, Title, Width};
+
+/// Kind of the log line.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
+pub enum EntryKind {
+    /// Denotes an help.
+    ///
+    /// Usually used in additional lines for warnings or errors.
+    Help,
+    /// Denotes a note.
+    ///
+    /// Usually used in additional lines for warnings or errors.
+    Note,
+    /// Denotes a warning.
+    Warning,
+    /// Denotes an error.
+    Error
+}
+impl Display for EntryKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EntryKind::Help => write!(f, "help"),
+            EntryKind::Note => write!(f, "note"),
+            EntryKind::Warning => write!(f, "warning"),
+            EntryKind::Error => write!(f, "error")
+        }
+    }
+}
+impl RichDisplay for EntryKind {
+    fn fmt_styled(&self, f: &mut Formatter<'_>, writer: &dyn StyledWriter) -> std::fmt::Result {
+        match self {
+            EntryKind::Help => styled_write!(f, writer, Style::Help, "help"),
+            EntryKind::Note => styled_write!(f, writer, Style::Note, "note"),
+            EntryKind::Warning => styled_write!(f, writer, Style::Warning, "warning"),
+            EntryKind::Error => styled_write!(f, writer, Style::Error, "error")
+        }
+    }
+}
+
+pub struct Event {
+    kind: EntryKind,
+    text: RichText
+}
+impl Display for Event {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        RichDisplay::fmt_styled(self, f, &StdWriter)
+    }
+}
+impl RichDisplay for Event {
+    fn fmt_styled(&self, f: &mut Formatter<'_>, writer: &dyn StyledWriter) -> std::fmt::Result {
+        self.text.fmt_styled(f, writer)
+    }
+}
+impl Event {
+    pub fn with_kind<D: 'static + RichDisplay>(caption: D, kind: EntryKind) -> Event {
+        let mut text = RichText::new();
+        text.add_new_line();
+        text.add_text(kind);
+        text.add_text(": ");
+        text.add_text(caption);
+        Event {
+            kind,
+            text
+        }
+    }
+
+    pub fn new_task<T: ToString, D: ToString>(name: T, description: D) -> Event {
+        let mut text = RichText::new();
+        text.add_new_line();
+        text.add_text(StyledItem::with_style(RightAligned(name.to_string(), 12), Style::Note));
+        text.add_text(" ");
+        text.add_text(description.to_string());
+        Event {
+            kind: EntryKind::Note,
+            text
+        }
+    }
+
+    pub fn new_error<D: 'static + RichDisplay>(caption: D) -> Event {
+        Event::with_kind(caption, EntryKind::Error)
+    }
+
+    pub fn new_warning<D: 'static + RichDisplay>(caption: D) -> Event {
+        Event::with_kind(caption, EntryKind::Warning)
+    }
+
+    pub fn new_note<D: 'static + RichDisplay>(caption: D) -> Event {
+        Event::with_kind(caption, EntryKind::Note)
+    }
+
+    pub fn new_help<D: 'static + RichDisplay>(caption: D) -> Event {
+        Event::with_kind(caption, EntryKind::Help)
+    }
+
+    pub fn file_reference<S: 'static + AsRef<str>>(mut self, name: S, line: usize, pos: usize) -> Event {
+        self.text.add_new_line();
+        self.text.add_text(Width);
+        self.text.add_text(StyledItem::with_style("-->", Style::Help));
+        self.text.add_text(format!(" {}:{}:{}", name.as_ref(), line, pos));
+        self
+    }
+
+    pub fn anonymous_file_reference(mut self, line: usize, pos: usize) -> Event {
+        self.text.add_new_line();
+        self.text.add_text(Width);
+        self.text.add_text(StyledItem::with_style("-->", Style::Help));
+        self.text.add_text(format!(" <anonymous>:{}:{}", line, pos));
+        self
+    }
+
+    pub fn new_line(mut self) -> Event {
+        self.text.add_new_line_with_default_margin();
+        self
+    }
+
+    pub fn new_source_code_line<S: ToString>(mut self, line_number: usize, text: S) -> Event {
+        self.text.add_new_line_with_margin(RichMargin::with_line_number(line_number));
+        self.text.add_text(text.to_string());
+        self
+    }
+
+    pub fn note<D: 'static + RichDisplay>(mut self, text: D) -> Event {
+        self.text.add_new_line_with_margin(RichMargin::new_dashed());
+        self.text.add_text(Title("note"));
+        self.text.add_text(": ");
+        self.text.add_text(text);
+        self
+    }
+
+    pub fn help<D: 'static + RichDisplay>(mut self, text: D) -> Event {
+        self.text.add_new_line_with_margin(RichMargin::new_dashed());
+        self.text.add_text(Title("help"));
+        self.text.add_text(": ");
+        self.text.add_text(text);
+        self
+    }
+
+    pub fn print<D: 'static + RichDisplay>(mut self, text: D) -> Event {
+        self.text.add_text(text);
+        self
+    }
+
+    pub fn log_to_target(self, target: &Target) -> Result<()> {
+        target.log_event(self)
+    }
+}
+
+/*pub trait StyledObject: Styled {}
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 enum NoteKind {
@@ -298,13 +446,13 @@ struct Note {
     text: String,
 }
 impl Styled for Note {
-    fn fmt_styled(&self, f: &mut Formatter<'_>, styler: &'static dyn Styler) -> std::fmt::Result {
+    fn fmt_styled(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
         let len = f.width().unwrap_or(0);
         let mut lines = self.text.lines();
         // Write first line, if any.
         if let Some(line) = lines.next() {
             write!(f, "{: <len$}", StyledLineStart::new_bullet(styler), len = len)?;
-            styler.fmt_str(f, StylerTemplate::Title, self.kind.as_str())?;
+            styler.write_str(f, Style::Title, self.kind.as_str())?;
             writeln!(f, ": {}", line)?;
         }
         // Write other lines.
@@ -316,6 +464,7 @@ impl Styled for Note {
         Ok(())
     }
 }
+impl StyledObject for Note {}
 impl Display for Note {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let len = f.width().unwrap_or(0);
@@ -333,147 +482,133 @@ impl Display for Note {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
-struct AnnotationReference {
-    position: usize,
-    len: usize
-}
-impl PartialOrd for AnnotationReference {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.position.partial_cmp(&other.position)
-    }
-}
-impl Ord for AnnotationReference {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.position.cmp(&other.position)
-    }
-}
-impl From<(usize, usize)> for AnnotationReference {
-    fn from((position, len): (usize, usize)) -> Self {
-        AnnotationReference { position, len }
-    }
-}
-
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-struct Annotation {
-    style: EntryKind,
-    reference: AnnotationReference,
+struct UnderLine {
+    style: Style,
+    range: Range<usize>,
+    und_ch: char,
     text: String
 }
-impl PartialOrd for Annotation {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.reference.partial_cmp(&other.reference)
-    }
-}
-impl Ord for Annotation {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.reference.cmp(&other.reference)
-    }
-}
-impl Display for Annotation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.style.style(&self.text))
-    }
-}
-impl Annotation {
-    fn advance(&self, offset: &mut usize, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{: >len$}", "", len = self.reference.position - *offset)?;
-        *offset = self.reference.position;
-        Ok(())
-    }
 
-    fn draw_underline(&self, offset: &mut usize, f: &mut Formatter) -> std::fmt::Result {
-        self.advance(offset, f)?;
-        write!(f, "{}", AnnotationUnderline(self.style, self.reference.len))?;
-        *offset += self.reference.len;
-        Ok(())
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
+struct UnderLinesAnnotationWriter<'a> {
+    lines: Vec<&'a UnderLine>
+}
+impl<'a> FromIterator<&'a UnderLine> for UnderLinesAnnotationWriter<'a> {
+    fn from_iter<T: IntoIterator<Item=&'a UnderLine>>(iter: T) -> Self {
+        let lines = iter.into_iter().collect();
+        UnderLinesAnnotationWriter { lines }
     }
-
-    fn draw_text_arrow(&self, offset: &mut usize, f: &mut Formatter) -> std::fmt::Result {
-        self.advance(offset, f)?;
-        if self.text.len() > 0 {
-            write!(f, "{: <len$}", self.style.style("|"), len = self.reference.len)?;
-        } else {
-            write!(f, "{: <len$}", "", len = self.reference.len)?;
+}
+impl<'a> UnderLinesAnnotationWriter<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+    /// Applies the internal styling logic.
+    fn fmt_styled_internal(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::result::Result<usize, std::fmt::Error> {
+        let mut offset = 0;
+        for line in &self.lines[..] {
+            write!(f, "{: <len$}", "", len = line.range.start - offset)?;
+            styler.write_char(f, line.style, '|')?;
+            offset = line.range.start + 1;
         }
-        *offset += self.reference.len;
+        Ok(offset)
+    }
+    /// Draws the first stage of the underlined annotations.
+    pub fn fmt_styled_step(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
+        let len = f.width().expect("no formatter width given");
+        if self.lines.is_empty() { return Ok(()); }
+        // Write start of line.
+        write!(f, "{: <len$}", StyledLineStart::new(styler), len = len)?;
+        // Write styled step.
+        self.fmt_styled_internal(f, styler)?;
+        writeln!(f)
+    }
+    /// Draws the second stage of the underlined annotation, with text;
+    /// then, removes the last element from the pseudo-iterator.
+    pub fn fmt_styled_then_pop(&mut self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
+        let len = f.width().expect("no formatter width given");
+        let last = match self.lines.pop() {
+            Some(line) => line,
+            None => return Ok(())
+        };
+        // Write styled step without the last annotation.
+        let offset = self.fmt_styled_internal(f, styler)?;
+        // Write last annotation
+        write!(f, "{: <len$}", "", len = last.range.start - offset)?;
+        styler.write_str(f, last.style, &last.text)?;
+        writeln!(f)
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
+struct UnderLines {
+    lines: Vec<UnderLine>
+}
+impl UnderLines {
+    fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    fn fmt_styled_underlines(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
+        let len = f.width().expect("no formatter width given");
+        write!(f, "{: <len$}", StyledLineStart::new(styler), len = len)?;
+        let mut offset = 0;
+        for line in &self.lines[..] {
+            write!(f, "{: <len$}", "", len = line.range.start - offset)?;
+            for _ in line.range.clone() {
+                styler.write_char(f, line.style, line.und_ch)?;
+            }
+            offset = line.range.end;
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, line: UnderLine) {
+        self.lines.push(line);
+        self.lines.sort_by(|a, b| a.range.start.cmp(&b.range.start))
+    }
+}
+impl Styled for UnderLines {
+    fn fmt_styled(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
+        if self.lines.is_empty() { return Ok(()); }
+        let len = f.width().expect("no formatter width given");
+        // Draw underlining.
+        self.fmt_styled_underlines(f, styler)?;
+        // Draw first annotation.
+        if let Some(first_line) = self.lines.last() {
+            write!(f, " ")?;
+            styler.write_str(f, first_line.style, &first_line.text)?;
+        }
+        writeln!(f)?;
+        // Draw other annotations.
+        let mut ula_writer: UnderLinesAnnotationWriter = self.lines[..(self.lines.len() - 1)].iter()
+            .filter(|line| !line.text.is_empty())
+            .collect();
+        while !ula_writer.is_empty() {
+            ula_writer.fmt_styled_step(f, styler)?;
+            ula_writer.fmt_styled_then_pop(f, styler)?;
+        }
         Ok(())
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
-struct SourceLine {
-    line: usize,
+struct Line {
+    number: usize,
     contents: String,
-    annotations: Vec<Annotation>,
-
+    lines: UnderLines
 }
-impl Display for SourceLine {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Get the offset of the line.
-        let width = f.width().unwrap_or_else(|| format!("{}", self.line).len());
-        writeln!(f, "{: <len$} {} {}", console::style(self.line).cyan().bright(), LineStart, self.contents, len = width)?;
-        if self.annotations.len() > 0 {
-            write!(f, "{: >len$} {}", "", LineStart, len = width)?;
-            // Draw annotation lines.
-            let mut offset = 0;
-            for ann in self.annotations.iter() {
-                ann.draw_underline(&mut offset, f)?;
-            }
-            // Draw annotation texts.
-            let mut annotations: Vec<&Annotation> = self.annotations.iter().collect();
-            // Draw first annotation.
-            if let Some(ann) = annotations.pop() {
-                write!(f, " {}", ann)?;
-            }
-            // Draw other annotations.
-            while let Some(ann) = annotations.pop() {
-                write!(f, "\n{: >len$} {}", "", LineStart, len = width)?;
-                offset = 0;
-                for prev_ann in annotations.iter() {
-                    prev_ann.draw_text_arrow(&mut offset, f)?;
-                }
-                ann.draw_text_arrow(&mut offset, f)?;
-                write!(f, "\n{: >len$} {}", "", LineStart, len = width)?;
-                offset = 0;
-                for prev_ann in annotations.iter() {
-                    prev_ann.draw_text_arrow(&mut offset, f)?;
-                }
-                ann.advance(&mut offset, f)?;
-                write!(f, "{}", ann)?;
-            }
-            writeln!(f)?;
-        }
-        Ok(())
+impl Styled for Line {
+    fn fmt_styled(&self, f: &mut Formatter<'_>, styler: &'static dyn StyledWriter) -> std::fmt::Result {
+        let len = f.width().unwrap_or_else(|| self.indentation());
+        writeln!(f, "{: <len$}{}", StyledLineStart::new(styler).line_number(self.number), self.contents, len = len)?;
+        self.lines.fmt_styled(f, styler)
     }
 }
-impl SourceLine {
-    pub fn new<S: Into<String>>(line: usize, contents: S) -> SourceLine {
-        let contents = contents.into();
-        let annotations = Vec::new();
-        SourceLine { line, contents, annotations,  }
-    }
-    pub fn annotate<R: Into<AnnotationReference>, S: Into<String>>(&mut self, style: EntryKind, reference: R, text: S) -> Result<()> {
-        let reference = reference.into();
-        let text = text.into();
-        let annotation = Annotation { style, reference, text };
-        for ann_ref in self.annotations.iter().map(|ann| &ann.reference) {
-            if ann_ref.position + ann_ref.len <= annotation.reference.position {
-                // The previous annotation ends before the start of the new annotation.
-                // It is safe to skip.
-                continue;
-            }
-            if annotation.reference.position + annotation.reference.len <= ann_ref.position {
-                // The previous annotation starts after the end of the new annotation.
-                // Since annotations are always sorted, it is safe to end here the loop.
-                break;
-            }
-            // If we got so far, then some annotation is overlapping, return an error.
-            return Err(ErrorKind::OverlappingAnnotation.into());
-        }
-        self.annotations.push(annotation);
-        self.annotations.sort();
-        Ok(())
+impl Line {
+    fn indentation(&self) -> usize {
+        format!("{}", self.number).len()
     }
 }
 
@@ -482,7 +617,7 @@ struct Source {
     filename: Option<PathBuf>,
     line_number: usize,
     position: usize,
-    lines: Vec<SourceLine>,
+    lines: Vec<Line>,
     notes: Vec<Note>
 }
 impl Display for Source {
@@ -1546,7 +1681,7 @@ impl Task {
     pub fn log<S: AsRef<str>>(self, target: S) {
         log::info!(target: target.as_ref(), "{}", self)
     }
-}
+}*/
 
 /// Log target containing information about the number of logged warnings/errors.
 #[derive(Clone, Debug)]
@@ -1554,7 +1689,7 @@ pub struct Target {
     name: Arc<Cow<'static, str>>,
     warnings: Arc<Mutex<usize>>,
     errors: Arc<Mutex<usize>>,
-    styler: Arc<Box<dyn Styler>>,
+    styler: Arc<Box<dyn StyledWriter>>,
     #[cfg(feature = "indicatif")]
     multi_progress: indicatif::MultiProgress,
 
@@ -1565,9 +1700,19 @@ impl Target {
         let name = Arc::new(name.into());
         let warnings = Arc::new(Mutex::new(0));
         let errors = Arc::new(Mutex::new(0));
-        let styler: Arc<Box<dyn Styler>> = Arc::new(Box::new(NoStyler));
+        let styler: Arc<Box<dyn StyledWriter>> = Arc::new(Box::new(StdWriter));
         #[cfg(feature = "indicatif")]
         let multi_progress = indicatif::MultiProgress::new();
+        Target { name, warnings, errors, styler, #[cfg(feature = "indicatif")] multi_progress }
+    }
+
+    pub fn with_styler<S: Into<Cow<'static, str>>, SW: 'static + StyledWriter>(name: S, styler: SW) -> Target {
+        let name = Arc::new(name.into());
+        let warnings = Arc::new(Mutex::new(0));
+        let errors = Arc::new(Mutex::new(0));
+        let styler: Arc<Box<dyn StyledWriter>> = Arc::new(Box::new(styler));
+        #[cfg(feature = "indicatif")]
+            let multi_progress = indicatif::MultiProgress::new();
         Target { name, warnings, errors, styler, #[cfg(feature = "indicatif")] multi_progress }
     }
 
@@ -1578,7 +1723,7 @@ impl Target {
         let name = Arc::new(name.into());
         let warnings = Arc::new(Mutex::new(0));
         let errors = Arc::new(Mutex::new(0));
-        let styler: Arc<Box<dyn Styler>> = Arc::new(Box::new(NoStyler));
+        let styler: Arc<Box<dyn StyledWriter>> = Arc::new(Box::new(StdWriter));
         Target { name, warnings, errors, styler, multi_progress }
     }
 
@@ -1640,41 +1785,16 @@ impl Target {
         *self.errors.lock().unwrap()
     }
 
-    fn log_entry(&self, entry: Entry) -> Result<()> {
-        match entry.kind {
+    fn log_event(&self, event: Event) -> Result<()> {
+        match event.kind {
             EntryKind::Error => { *self.errors.lock().unwrap() += 1; },
             EntryKind::Warning => { *self.warnings.lock().unwrap() += 1; },
             _ => {}
         }
         #[cfg(not(feature = "indicatif"))]
-        eprint!("{}", entry);
+        eprint!("{}", Styled(event, &**self.styler));
         #[cfg(feature = "indicatif")]
-        self.multi_progress.println(format!("{}", entry))?;
-        Ok(())
-    }
-
-    fn log_multi_entry(&self, multi: MultiEntry) -> Result<()> {
-        let kind = multi.entries.iter()
-            .map(|e| e.kind)
-            .max()
-            .unwrap_or(EntryKind::Help);
-        match kind {
-            EntryKind::Error => { *self.errors.lock().unwrap() += 1; },
-            EntryKind::Warning => { *self.warnings.lock().unwrap() += 1; },
-            _ => {}
-        }
-        #[cfg(not(feature = "indicatif"))]
-        eprint!("{}", multi);
-        #[cfg(feature = "indicatif")]
-        self.multi_progress.println(format!("{}", multi))?;
-        Ok(())
-    }
-
-    fn log_inline_entry(&self, entry: Task) -> Result<()> {
-        #[cfg(not(feature = "indicatif"))]
-        eprint!("{}", entry);
-        #[cfg(feature = "indicatif")]
-            self.multi_progress.println(format!("{}", entry))?;
+        self.multi_progress.println(format!("{}", Styled(event, &**self.styler)))?;
         Ok(())
     }
 
